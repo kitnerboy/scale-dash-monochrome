@@ -11,16 +11,100 @@
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
-// Demo state variables
-int speedVal = 0;
+// Simulation variables
+int currentSpeed = 0;
 bool speedUp = true;
-int gearIndex = 0; // 0=P, 1=R, 2=N, 3=D
+int currentGear = 0; // 0=P, 1=R, 2=N, 3=D
 unsigned long lastGearChange = 0;
 
-// Progress bars state
-int leftBarVal = 0;
-int rightBarVal = 99;
+int leftBarValue = 0;
+int rightBarValue = 99;
 bool leftBarUp = true;
+
+// ----------------------------------------------------
+// RENDERING FUNCTIONS
+// ----------------------------------------------------
+
+// Helper: Radial arc drawer for the speedometer
+void drawSpeedoArc(int centerX, int centerY, int innerRadius, int outerRadius, float progress) {
+    float startAngle = 3.66; // 210 degrees
+    float endAngle = -0.52;  // -30 degrees
+    float currentAngle = startAngle - (startAngle - endAngle) * progress;
+
+    for (float a = startAngle; a >= currentAngle; a -= 0.05) {
+        int x0 = centerX + cos(a) * innerRadius;
+        int y0 = centerY - sin(a) * innerRadius;
+        int x1 = centerX + cos(a) * outerRadius;
+        int y1 = centerY - sin(a) * outerRadius;
+        display.drawLine(x0, y0, x1, y1, SSD1306_WHITE);
+    }
+}
+
+// 1. Left Section: Mode label and progress bar (0 to 100)
+void drawLeftComponent(const char* modeText, int barValue) {
+    // Header text
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 2);
+    display.print(modeText);
+
+    // Frame rectangle: X=0 to X=42, Height=10 (Y=22 to Y=32)
+    display.drawRect(0, 22, 42, 10, SSD1306_WHITE);
+
+    // Fill from right to left
+    int fillWidth = map(barValue, 0, 100, 0, 38);
+    if (fillWidth > 0) {
+        display.fillRect(41 - fillWidth, 24, fillWidth, 6, SSD1306_WHITE);
+    }
+}
+
+// 2. Center Section: Speedometer arc and numerical value
+void drawCenterComponent(int speed) {
+    int centerX = 64;
+    int centerY = 24;
+    float progress = (float)speed / 260.0; // Normalized 0.0 to 1.0
+
+    // Draw gauge arc
+    drawSpeedoArc(centerX, centerY, 18, 21, progress);
+
+    // Speed digits positioning
+    display.setTextSize(1);
+    if (speed < 10) display.setCursor(61, 10);
+    else if (speed < 100) display.setCursor(58, 10);
+    else display.setCursor(55, 10);
+    display.print(speed);
+
+    // "mph" label
+    display.setCursor(55, 20);
+    display.print("mph");
+}
+
+// 3. Right Section: PRND Selector and right progress bar (0 to 100)
+void drawRightComponent(int gearIdx, int barValue) {
+    // PRND Text
+    display.setTextSize(1);
+    display.setCursor(98, 10);
+    display.print("PRND");
+
+    // Indicator arrow above selected gear
+    int arrowXPositions[] = {100, 106, 112, 118};
+    int arrX = arrowXPositions[gearIdx];
+    display.drawTriangle(arrX, 2, arrX - 2, 0, arrX + 2, 0, SSD1306_WHITE);
+    display.drawFastVLine(arrX, 2, 2, SSD1306_WHITE);
+
+    // Frame rectangle: X=86 to X=128, Height=10 (Y=22 to Y=32)
+    display.drawRect(86, 22, 42, 10, SSD1306_WHITE);
+
+    // Fill from right to left
+    int fillWidth = map(barValue, 0, 100, 0, 38);
+    if (fillWidth > 0) {
+        display.fillRect(126 - fillWidth, 24, fillWidth, 6, SSD1306_WHITE);
+    }
+}
+
+// ----------------------------------------------------
+// MAIN ARDUINO CORE FUNCTIONS
+// ----------------------------------------------------
 
 void setup() {
     Wire.setSDA(0);
@@ -33,139 +117,45 @@ void setup() {
     display.clearDisplay();
 }
 
-// Helper function to draw the speedometer arc using polar coordinates
-void drawSpeedoArc(int centerX, int centerY, int innerRadius, int outerRadius, float progress) {
-    // Progress is a float from 0.0 to 1.0
-    // The arc spans from ~150 degrees to ~30 degrees (in standard math terms)
-    // Let's map 0.0-1.0 to angles from 3.66 rad (210°) to -0.52 rad (-30°) counter-clockwise
-    float startAngle = 3.49; // ~200 degrees
-    float endAngle = -0.35;  // -20 degrees
-    float currentAngle = startAngle - (startAngle - endAngle) * progress;
-
-    // Draw the arc lines
-    for (float a = startAngle; a >= currentAngle; a -= 0.05) {
-        int x0 = centerX + cos(a) * innerRadius;
-        int y0 = centerY - sin(a) * innerRadius; // Invert Y for screen coordinates
-        int x1 = centerX + cos(a) * outerRadius;
-        int y1 = centerY - sin(a) * outerRadius;
-        display.drawLine(x0, y0, x1, y1, SSD1306_WHITE);
-    }
-}
-
 void loop() {
     display.clearDisplay();
 
-    // ----------------------------------------------------
-    // 1. LEFT SECTION: "4H" Mode & Left Progress Bar
-    // ----------------------------------------------------
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(24, 2);
-    display.print("4H");
+    // Render components using isolated functions with passed parameters
+    drawLeftComponent("4H", leftBarValue);
+    drawCenterComponent(currentSpeed);
+    drawRightComponent(currentGear, rightBarValue);
 
-    // Left progress bar container (slanted look approximation)
-    display.drawLine(10, 24, 55, 20, SSD1306_WHITE);
-    display.drawLine(10, 24, 15, 30, SSD1306_WHITE);
-    display.drawLine(15, 30, 55, 30, SSD1306_WHITE);
-
-    // Fill left progress bar (grows from right to left as requested)
-    int leftBarWidth = map(leftBarVal, 0, 100, 0, 40);
-    if (leftBarWidth > 0) {
-        for(int i = 0; i < leftBarWidth; i++) {
-            int currX = 55 - i;
-            // Linear interpolation for slanted height top boundary
-            int topY = 20 + (55 - currX) * 4 / 45;
-            display.drawFastVLine(currX, topY, 30 - topY, SSD1306_WHITE);
-        }
-    }
-
-    // ----------------------------------------------------
-    // 2. CENTER SECTION: Speedometer Arc & Digits
-    // ----------------------------------------------------
-    int centerX = 64;
-    int centerY = 34; // Center is pushed down off-screen to make a nice top arc
-    float speedProgress = (float)speedVal / 260.0;
-
-    // Draw the animated arc (double layer for thickness)
-    drawSpeedoArc(centerX, centerY, 20, 24, speedProgress);
-
-    // Speed value text (Scaled x2 for prominent look)
-    display.setTextSize(2);
-    if (speedVal < 10) display.setCursor(58, 2);
-    else if (speedVal < 100) display.setCursor(52, 2);
-    else display.setCursor(46, 2);
-    display.print(speedVal);
-
-    // "mph" label
-    display.setTextSize(1);
-    display.setCursor(55, 18);
-    display.print("mph");
-
-    // ----------------------------------------------------
-    // 3. RIGHT SECTION: PRND Gear Selector & Right Bar
-    // ----------------------------------------------------
-    display.setTextSize(1);
-    display.setCursor(92, 10);
-    display.print("PRND");
-
-    // Jumping arrow indicator above PRND
-    int arrowXPositions[] = {94, 100, 106, 112}; // Aligning with P, R, N, D
-    int arrX = arrowXPositions[gearIndex];
-    display.drawTriangle(arrX, 2, arrX - 2, 0, arrX + 2, 0, SSD1306_WHITE);
-    display.drawFastVLine(arrX, 2, 3, SSD1306_WHITE);
-
-    // Right progress bar container (slanted on the right)
-    display.drawLine(75, 20, 118, 24, SSD1306_WHITE);
-    display.drawLine(118, 24, 123, 30, SSD1306_WHITE);
-    display.drawLine(75, 30, 123, 30, SSD1306_WHITE);
-
-    // Right numeric value (e.g., 99)
-    display.setCursor(110, 20);
-    display.print(rightBarVal);
-
-    // Fill right progress bar (grows/shrinks from right to left)
-    int rightBarWidth = map(rightBarVal, 0, 100, 0, 35);
-    if (rightBarWidth > 0) {
-        for(int i = 0; i < rightBarWidth; i++) {
-            int currX = 110 - i; // Fills from right side boundary inwards
-            if (currX < 75) break;
-            int topY = 20 + (currX - 75) * 4 / 43;
-            display.drawFastVLine(currX, topY, 30 - topY, SSD1306_WHITE);
-        }
-    }
-
-    // Render everything to the physical OLED panel
     display.display();
 
     // ----------------------------------------------------
-    // 4. ANIMATION LOGIC (Data Simulation)
+    // DATA SIMULATION LOGIC
     // ----------------------------------------------------
-    // Fake speed acceleration/deceleration
+    // Speed simulation
     if (speedUp) {
-        speedVal += 3;
-        if (speedVal >= 260) speedUp = false;
+        currentSpeed += 2;
+        if (currentSpeed >= 260) speedUp = false;
     } else {
-        speedVal -= 4;
-        if (speedVal <= 0) speedUp = true;
+        currentSpeed -= 3;
+        if (currentSpeed <= 0) speedUp = true;
     }
 
-    // Fake left progress bar bouncing
+    // Left bar simulation
     if (leftBarUp) {
-        leftBarVal += 2;
-        if (leftBarVal >= 100) leftBarUp = false;
+        leftBarValue += 2;
+        if (leftBarValue >= 100) leftBarUp = false;
     } else {
-        leftBarVal -= 2;
-        if (leftBarVal <= 0) leftBarUp = true;
+        leftBarValue -= 2;
+        if (leftBarValue <= 0) leftBarUp = true;
     }
 
-    // Fake right progress bar (tied backwards to speed for dynamic look)
-    rightBarVal = map(speedVal, 0, 260, 99, 10);
+    // Right bar simulation (inversely proportional to speed)
+    rightBarValue = map(currentSpeed, 0, 260, 99, 5);
 
-    // Cycle through PRND every 2.5 seconds
-    if (millis() - lastGearChange > 2500) {
-        gearIndex = (gearIndex + 1) % 4;
+    // Gear switching simulation every 2 seconds
+    if (millis() - lastGearChange > 2000) {
+        currentGear = (currentGear + 1) % 4;
         lastGearChange = millis();
     }
 
-    delay(10); // Smooth frame update pacing
+    delay(15);
 }
