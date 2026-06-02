@@ -2,6 +2,7 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <Adafruit_NeoPixel.h>
 #include <math.h>
 
 constexpr int kScreenWidth = 128;
@@ -16,8 +17,11 @@ constexpr int kRightBarMax = 99;
 constexpr unsigned long kGearChangeIntervalMs = 3000;
 constexpr unsigned long kSignalChangeIntervalMs = 4000;
 constexpr unsigned long kBlinkIntervalMs = 400;
+constexpr int kNeoPixelPin = 12;
+constexpr int kNeoPixelCount = 1;
 
 Adafruit_SSD1306 display(kScreenWidth, kScreenHeight, &Wire, kOledReset);
+Adafruit_NeoPixel pixels(kNeoPixelCount, kNeoPixelPin, NEO_GRB + NEO_KHZ800);
 
 enum class TurnSignalState : uint8_t {
     Off = 0,
@@ -152,15 +156,27 @@ void drawRightComponent(uint8_t gearIdx, int barValue) {
 // MAIN ARDUINO CORE FUNCTIONS
 // ----------------------------------------------------
 
+void blinkErrorLed(uint32_t color) {
+    while (true) {
+        pixels.setPixelColor(0, color);
+        pixels.show();
+        delay(200);
+        pixels.setPixelColor(0, 0);
+        pixels.show();
+        delay(200);
+    }
+}
+
 void setup() {
+    pixels.begin();
+    pixels.setBrightness(50);
+
     Wire.setSDA(0);
     Wire.setSCL(1);
     Wire.begin();
 
     if (!display.begin(SSD1306_SWITCHCAPVCC, kScreenAddress)) {
-        while (true) {
-            delay(100);
-        }
+        blinkErrorLed(pixels.Color(255, 0, 0));
     }
     display.clearDisplay();
 }
